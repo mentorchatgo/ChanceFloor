@@ -1,0 +1,6 @@
+{
+  "name": "Duck Dodger 3D",
+  "description": "A 3D dodging game using external AAA glTF models. Dodge the falling Buster Drones!",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
