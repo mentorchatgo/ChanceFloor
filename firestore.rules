@@ -1,0 +1,49 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidLeaderboardEntry(data) {
+      return data.keys().hasAll(['userId', 'displayName', 'score', 'updatedAt']) &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.displayName is string && data.displayName.size() <= 100 &&
+             data.score is number && data.score >= 0;
+    }
+
+    match /leaderboard/{userId} {
+      allow read: if true;
+      // Note: we can't reliably predict if data.updatedAt is number or timestamp if we use server timestamp. Number is fine.
+      allow create: if isSignedIn() &&
+                    isValidId(userId) &&
+                    request.auth.uid == userId &&
+                    isValidLeaderboardEntry(incoming()) &&
+                    incoming().userId == userId;
+
+      allow update: if isSignedIn() &&
+                    isValidId(userId) &&
+                    request.auth.uid == userId &&
+                    isValidLeaderboardEntry(incoming()) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'score', 'updatedAt', 'userId']) &&
+                    incoming().score >= existing().score &&
+                    incoming().userId == existing().userId;
+    }
+  }
+}

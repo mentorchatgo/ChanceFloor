@@ -1,0 +1,33 @@
+{
+  "entities": {
+    "LeaderboardEntry": {
+      "title": "Leaderboard Entry",
+      "description": "High score of a player",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "score": {
+          "type": "number",
+          "description": "The highest score achieved by the player"
+        },
+        "updatedAt": {
+          "type": "number"
+        }
+      },
+      "required": ["userId", "displayName", "score", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "leaderboard/{userId}": {
+      "schema": {
+        "$ref": "#/entities/LeaderboardEntry"
+      },
+      "description": "High scores of players"
+    }
+  }
+}

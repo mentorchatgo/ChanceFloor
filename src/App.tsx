@@ -51,6 +51,13 @@ export default function App() {
           <feComposite in="SourceGraphic" in2="a" operator="in" />
           <feMorphology operator="dilate" radius="1.5" />
         </filter>
+        <filter id="pixelate-text" x="-10%" y="-10%" width="120%" height="120%">
+          <feFlood x="1" y="1" height="1" width="1" />
+          <feComposite width="1.5" height="1.5" />
+          <feTile result="a" />
+          <feComposite in="SourceGraphic" in2="a" operator="in" />
+          <feMorphology operator="dilate" radius="0.75" />
+        </filter>
       </svg>
 
       {/* Global CRT / Vignette Overlay */}

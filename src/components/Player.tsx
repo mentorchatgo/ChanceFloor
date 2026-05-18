@@ -14,11 +14,13 @@ export default function Player() {
   const { actions } = useAnimations(animations, group);
   const { camera } = useThree();
 
+  const materialRef = useRef(new THREE.MeshStandardMaterial({ color: '#FFFFFF' }));
+  
   useEffect(() => {
     scene.traverse((node) => {
       if ((node as THREE.Mesh).isMesh) {
         const mesh = node as THREE.Mesh;
-        mesh.material = new THREE.MeshStandardMaterial({ color: '#000000' });
+        mesh.material = materialRef.current;
       }
     });
 
@@ -30,7 +32,25 @@ export default function Player() {
     }
   }, [actions, scene]);
 
+  const rainbowColors = useRef([
+    new THREE.Color('#FF0000'),
+    new THREE.Color('#0000FF'),
+    new THREE.Color('#FFFF00'),
+    new THREE.Color('#00FF00')
+  ]).current;
+
   useFrame((state, delta) => {
+    const { playerColor } = useGameStore.getState();
+    if (playerColor === 'rainbow') {
+      const t = state.clock.elapsedTime * 1.5;
+      const idx = Math.floor(t) % 4;
+      const nextIdx = (idx + 1) % 4;
+      const mix = t % 1;
+      materialRef.current.color.lerpColors(rainbowColors[idx], rainbowColors[nextIdx], mix);
+    } else {
+      materialRef.current.color.set(playerColor);
+    }
+
     if (!body.current) return;
     
     const { gamePhase, gameStarted } = useGameStore.getState();

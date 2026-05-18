@@ -5,12 +5,13 @@ import { Grid, Edges, useTexture, Text } from '@react-three/drei';
 import { useFrame, useThree } from '@react-three/fiber';
 import Player from './Player';
 import { useGameStore, TILE_COLORS } from '../store';
+import { saveHighScore } from '../firebase';
 
 function Sun() {
   const texture = useTexture('https://i.imgur.com/2LA6IRt.png');
   return (
     <mesh position={[0, 100, -800]} rotation={[0, 0, 0]}>
-      <planeGeometry args={[300, 300]} />
+      <planeGeometry args={[225, 225]} />
       <meshBasicMaterial map={texture} transparent fog={false} toneMapped={false} color={[1.2, 1.2, 1.2]} />
     </mesh>
   );
@@ -96,75 +97,197 @@ function FloatingScreen() {
 }
 
 function GameLoop({ tiles }: { tiles: any[] }) {
-  const { gamePhase, setGamePhase, countdown, setCountdown, countdownDuration, setCountdownDuration, setTargetColor, targetColor, gameStarted, endGame, setScreenVisible } = useGameStore();
+  const { gamePhase, setGamePhase, countdown, setCountdown, countdownDuration, setCountdownDuration, setTargetColor, targetColor, gameStarted, endGame, setScreenVisible, gameMode } = useGameStore();
   const { scene } = useThree();
 
   useFrame((state, delta) => {
     if (!gameStarted) return;
     
+    // Position sync
+    const playerBody = scene.getObjectByName('player');
+    if (playerBody) {
+      const pos = playerBody.position;
+      const { ws, gameMode } = useGameStore.getState();
+      if ((gameMode === 'public' || gameMode === 'private') && ws && ws.readyState === 1 && Math.random() < 0.1) {
+         ws.send(JSON.stringify({ type: 'playerUpdate', position: [pos.x, pos.y, pos.z], color: useGameStore.getState().playerColor }));
+      }
+    }
+
     const dir = new THREE.Vector3();
     state.camera.getWorldDirection(dir);
     const screenPos = new THREE.Vector3(0, 10, -40.5);
     const toScreen = screenPos.clone().sub(state.camera.position).normalize();
     const dot = dir.dot(toScreen);
     const isMobile = window.innerWidth < 768;
-    setScreenVisible(dot > (isMobile ? 0.6 : 0.4));
+    // On mobile, increase dot threshold so HUD shows more easily if they aren't looking perfectly at the screen
+    setScreenVisible(dot > (isMobile ? 0.85 : 0.4));
 
-    if (gamePhase === 'countdown') {
-       if (countdown > 0) {
-         setCountdown(countdown - delta);
-       } else {
-         setGamePhase('elimination');
-         setCountdown(3);
-       }
-    } else if (gamePhase === 'elimination') {
-       // Check death
-       const playerBody = scene.getObjectByName('player');
-       if (playerBody) {
-         // player is slightly offset by [0, 1, 0] initially but translation changes
-         const pos = playerBody.position; 
-         // But wait, position on a Rapier RigidBody might not update seamlessly unless we read from rigid body directly.
-         // Let's use position directly for now, or find the tile by world position.
-         // The tile grid is from -40 to 40.
-         const x = pos.x;
-         const z = pos.z;
-         
-         // Find matching tile
-         const matchingTile = tiles.find(t => 
-            Math.abs(t.x - x) <= 4 && Math.abs(t.z - z) <= 4
-         );
-         
-         const isGrounded = pos.y < 1.3; // Player rests at ~1.2, so < 1.3 means touching the ground
-
-         if (isGrounded && (!matchingTile || matchingTile.color !== targetColor)) {
-           // Player is on wrong tile
-           setGamePhase('gameover');
-           
-           setTimeout(() => {
-             useGameStore.getState().endGame();
-             setTimeout(() => {
-               useGameStore.getState().startGame(); // restart after showing menu for 2s
-             }, 2000);
-           }, 3000);
-           return;
+    const isHost = useGameStore.getState().isHost;
+    if (gameMode === 'local' || (gameMode === 'private' && isHost)) {
+      if (gamePhase === 'countdown') {
+         if (countdown > 0) {
+           setCountdown(countdown - delta);
+         } else {
+           setGamePhase('elimination');
+           setCountdown(3);
          }
-       }
+      } else if (gamePhase === 'elimination') {
+         // Death logic check
+         if (playerBody) {
+           const pos = playerBody.position; 
+           const isGrounded = pos.y < 1.3;
+           if (isGrounded) {
+             const matchingTile = tiles.find(t => Math.abs(t.x - pos.x) <= 4 && Math.abs(t.z - pos.z) <= 4);
+             if (!matchingTile || matchingTile.color !== targetColor) {
+               setGamePhase('gameover');
+               saveHighScore(useGameStore.getState().score).catch(console.error);
+               setTimeout(() => {
+                 useGameStore.getState().endGame();
+                 const t = setTimeout(() => {
+                   useGameStore.getState().startGame();
+                 }, 5000);
+                 useGameStore.getState().setRestartTimer(t);
+               }, 3000);
+               return;
+             }
+           }
+         }
 
-       if (countdown > 0) {
-         setCountdown(countdown - delta);
-       } else {
-         const newDuration = Math.max(1.0, countdownDuration - 0.1);
-         setCountdownDuration(newDuration);
-         setCountdown(newDuration);
-         setTargetColor(TILE_COLORS[Math.floor(Math.random() * TILE_COLORS.length)]);
-         setGamePhase('countdown');
-       }
-    } else if (gamePhase === 'gameover') {
-       // Just wait here
+         if (countdown > 0) {
+           setCountdown(countdown - delta);
+         } else {
+           useGameStore.getState().nextRound();
+           const newDuration = Math.max(1.0, countdownDuration - 0.1);
+           setCountdownDuration(newDuration);
+           setCountdown(newDuration);
+           setTargetColor(TILE_COLORS[Math.floor(Math.random() * TILE_COLORS.length)]);
+           setGamePhase('countdown');
+         }
+      }
+      
+      if (gameMode === 'private' && isHost) {
+        const { ws } = useGameStore.getState();
+        if (ws && ws.readyState === 1 && Math.random() < 0.2) { // 5 ticks per sec
+          ws.send(JSON.stringify({
+            type: 'privateStateUpdate',
+            state: {
+              round: useGameStore.getState().round,
+              countdownDuration: useGameStore.getState().countdownDuration,
+              countdown: useGameStore.getState().countdown,
+              targetColor: useGameStore.getState().targetColor,
+              phase: useGameStore.getState().gamePhase
+            }
+          }));
+        }
+      }
+    } else {
+      // In public/private, server/host handles phase changes and ticking
+      // We just check death during elimination phase locally
+      if (gamePhase === 'elimination' && playerBody) {
+         const pos = playerBody.position; 
+         const isGrounded = pos.y < 1.3;
+         if (isGrounded) {
+           const matchingTile = tiles.find(t => Math.abs(t.x - pos.x) <= 4 && Math.abs(t.z - pos.z) <= 4);
+           if (!matchingTile || matchingTile.color !== targetColor) {
+             setGamePhase('gameover');
+             saveHighScore(useGameStore.getState().score).catch(console.error);
+             setTimeout(() => {
+               useGameStore.getState().endGame();
+               const t = setTimeout(() => {
+                 useGameStore.getState().startGame();
+               }, 5000);
+               useGameStore.getState().setRestartTimer(t);
+             }, 3000);
+           }
+         }
+      }
     }
   });
 
   return null;
+}
+
+function PalmTreeInstance({ palm, texture }: { palm: any, texture: THREE.Texture }) {
+  const ref = React.useRef<THREE.Group>(null!);
+  
+  useFrame(({ camera }) => {
+    if (ref.current) {
+      ref.current.lookAt(camera.position.x, ref.current.position.y, camera.position.z);
+    }
+  });
+
+  return (
+    <group ref={ref} position={[palm.x, 0, palm.z]} scale={palm.scale}>
+      <mesh position={[0, 15, 0]} scale={[palm.mirrored ? -1 : 1, 1, 1]}>
+        <planeGeometry args={[30, 30]} />
+        <meshBasicMaterial map={texture} transparent alphaTest={0.1} side={THREE.DoubleSide} fog={true} />
+      </mesh>
+    </group>
+  );
+}
+
+function CityInstance({ pos, texture }: { pos: [number, number, number], texture: THREE.Texture }) {
+  const ref = React.useRef<THREE.Group>(null!);
+  
+  useFrame(({ camera }) => {
+    if (ref.current) {
+      ref.current.lookAt(camera.position.x, ref.current.position.y, camera.position.z);
+    }
+  });
+
+  return (
+    <group ref={ref} position={pos}>
+      <mesh position={[0, 50, 0]}>
+        <planeGeometry args={[300, 100]} />
+        <meshBasicMaterial map={texture} transparent alphaTest={0.01} side={THREE.DoubleSide} fog={true} />
+      </mesh>
+    </group>
+  );
+}
+
+function Cities() {
+  const texture = useTexture('https://i.imgur.com/yDt0qHP.png');
+  
+  return (
+    <group>
+      <CityInstance pos={[400, 0, 0]} texture={texture} />
+      <CityInstance pos={[-200, 0, 346]} texture={texture} />
+      <CityInstance pos={[-200, 0, -346]} texture={texture} />
+    </group>
+  );
+}
+
+function PalmTrees() {
+  const texture = useTexture('https://i.imgur.com/A2LvDwt.png');
+  
+  const palms = useMemo(() => {
+    const arr = [];
+    for (let i = 0; i < 80; i++) {
+      let x = (Math.random() - 0.5) * 600;
+      let z = (Math.random() - 0.5) * 600;
+      
+      if (Math.abs(x) < 55 && Math.abs(z) < 55) {
+        if (Math.random() > 0.5) {
+          x = (Math.random() > 0.5 ? 1 : -1) * (55 + Math.random() * 245);
+        } else {
+          z = (Math.random() > 0.5 ? 1 : -1) * (55 + Math.random() * 245);
+        }
+      }
+
+      const scale = (0.8 + Math.random() * 0.8) * 0.5;
+      const mirrored = Math.random() > 0.5;
+      arr.push({ id: `palm-${i}`, x, z, scale, mirrored });
+    }
+    return arr;
+  }, []);
+
+  return (
+    <group>
+      {palms.map(palm => (
+         <PalmTreeInstance key={palm.id} palm={palm} texture={texture} />
+      ))}
+    </group>
+  );
 }
 
 export default function Scene() {
@@ -330,7 +453,75 @@ export default function Scene() {
         ))}
       </group>
 
+      <Cities />
+      <PalmTrees />
+      <OtherPlayers />
       {gameStarted && <Player />}
     </>
+  );
+}
+
+const rainbowColorsArr = [
+  '#FF0000',
+  '#0000FF',
+  '#FFFF00',
+  '#00FF00'
+];
+
+function OtherPlayerInstance({ info }: { info: any }) {
+  const materialRef = React.useRef(new THREE.MeshStandardMaterial({
+    color: info.color && info.color !== 'rainbow' ? info.color : 'hotpink',
+    transparent: true,
+    opacity: 0.8,
+  }));
+
+  useFrame((state) => {
+    if (info.color === 'rainbow') {
+      const t = state.clock.elapsedTime * 1.5;
+      const idx = Math.floor(t) % 4;
+      const nextIdx = (idx + 1) % 4;
+      const mix = t % 1;
+      materialRef.current.color.lerpColors(
+        new THREE.Color(rainbowColorsArr[idx]), 
+        new THREE.Color(rainbowColorsArr[nextIdx]), 
+        mix
+      );
+    } else {
+      materialRef.current.color.set(info.color || 'hotpink');
+    }
+  });
+
+  return (
+    <group position={info.position}>
+       <mesh position={[0, 0, 0]}>
+         <capsuleGeometry args={[0.5, 1, 4, 16]} />
+         <primitive object={materialRef.current} attach="material" />
+       </mesh>
+       {info.displayName && (
+         <Text
+           position={[0, 1.2, 0]}
+           fontSize={0.4}
+           color="white"
+           anchorX="center"
+           anchorY="middle"
+           outlineWidth={0.05}
+           outlineColor="black"
+         >
+           {info.displayName}
+         </Text>
+       )}
+    </group>
+  );
+}
+
+function OtherPlayers() {
+  const otherPlayers = useGameStore(s => s.otherPlayers);
+  
+  return (
+    <group>
+      {Object.entries(otherPlayers).map(([id, info]) => (
+        <OtherPlayerInstance key={id} info={info} />
+      ))}
+    </group>
   );
 }
